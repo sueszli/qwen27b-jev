@@ -5,7 +5,6 @@
 import copy
 import importlib.util
 import json
-import math
 import os
 import random
 import time
@@ -26,7 +25,7 @@ SYSTEM = "Apply the supplied criterion to the supplied evidence. Choose exactly 
 
 
 def set_storage(weights_dir: Path) -> Path:
-    (weights_dir / "tmp").mkdir(parents=True, exist_ok=True)  # also creates weights_dir
+    (weights_dir / "tmp").mkdir(parents=True, exist_ok=True)
     hf, pt, xdg = weights_dir / "hf", weights_dir / "torch", weights_dir / "cache"
     os.environ.update({"HF_HOME": str(hf), "HF_HUB_CACHE": str(hf), "TRANSFORMERS_CACHE": str(hf), "HF_XET_CACHE": str(hf / "xet"), "HF_HUB_DISABLE_TELEMETRY": "1", "TORCH_HOME": str(pt), "TORCHINDUCTOR_CACHE_DIR": str(pt / "inductor"), "TRITON_CACHE_DIR": str(pt / "triton"), "CUDA_CACHE_PATH": str(weights_dir / "cuda"), "XDG_CACHE_HOME": str(xdg), "XDG_DATA_HOME": str(xdg), "XDG_CONFIG_HOME": str(xdg), "TMPDIR": str(weights_dir / "tmp")})
     return weights_dir
@@ -42,12 +41,6 @@ def set_seed(seed: int = 41) -> int:
     torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark = True, False
     torch.use_deterministic_algorithms(True, warn_only=True)
     return seed
-
-
-def softmax(logits: list[float]) -> list[float]:
-    assert len(logits) >= 2 and all(math.isfinite(l) for l in logits), "need at least two finite logits"
-    weights = [math.exp(l - max(logits)) for l in logits]
-    return [w / sum(weights) for w in weights]  # sums to 1 within float error
 
 
 #
@@ -68,7 +61,7 @@ def slot_ids(tokenizer) -> tuple[list[int], int]:
     encoded = [tokenizer.encode(letter, add_special_tokens=False) for letter in LETTERS]
     assert all(len(ids) == 1 and tokenizer.decode(ids) == letter for ids, letter in zip(encoded, LETTERS)), "an answer slot is not one exact round-trip token"
     assert len({ids[0] for ids in encoded}) == len(LETTERS), "answer slot tokens collide"
-    pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id  # only used to pad shared suffixes
+    pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     assert pad is not None, "tokenizer has neither a pad nor an eos token to pad suffixes with"
     return [ids[0] for ids in encoded], pad
 
@@ -91,7 +84,7 @@ def encode_decision(tokenizer, slots: list[int], state: str | dict | list, quest
 
 
 def state_prefix(tokenizer, slots: list[int], state: str | dict | list, encoded: list[list[int]]) -> list[int]:
-    prompt = encode_decision(tokenizer, slots, state, "prefix boundary placeholder", {"yes": "Yes", "no": "No"})[1]  # criterion and options follow the evidence
+    prompt = encode_decision(tokenizer, slots, state, "prefix boundary placeholder", {"yes": "Yes", "no": "No"})[1]
     evidence = json.dumps({"evidence": state}, ensure_ascii=False)[:-1]  # the serialized state without its closing brace
     assert prompt.count(evidence) == 1, "cannot locate the serialized evidence in the rendered prompt"
     prefix = tokenizer.encode(prompt[: prompt.index(evidence)] + evidence, add_special_tokens=False)[:-1]  # json punctuation can merge across the cut
@@ -104,14 +97,14 @@ def shared_logits(model, prefix: list[int], suffixes: list[list[int]], pad: int)
     ends, keep, positions = [len(s) - 1 for s in suffixes], sorted({len(s) - 1 for s in suffixes}), [list(range(offset, offset + len(s))) + [0] * (width - len(s)) for s in suffixes]
     cache = model(input_ids=torch.tensor([prefix], dtype=torch.long, device=device), attention_mask=torch.ones((1, offset), dtype=torch.long, device=device), use_cache=True, logits_to_keep=1).past_key_values
     assert cache is not None and cache.get_seq_length() == offset, "the state prefix did not fill the cache"
-    try:  # path (a) of PLAN.md: transformers reorders DynamicLayer kv rows and LinearAttentionLayer conv and recurrent states alike, by index_select
+    try:
         cache.reorder_cache(torch.zeros(len(suffixes), dtype=torch.long, device=device))
         padded = model(input_ids=torch.tensor([s + [pad] * (width - len(s)) for s in suffixes], dtype=torch.long, device=device), attention_mask=torch.tensor([[1] * (offset + len(s)) + [0] * (width - len(s)) for s in suffixes], dtype=torch.long, device=device), position_ids=torch.tensor(positions, dtype=torch.long, device=device), past_key_values=cache, use_cache=True, logits_to_keep=torch.tensor(keep, dtype=torch.long, device=device))
         return [padded.logits[row, keep.index(end)] for row, end in enumerate(ends)]
     except Exception as error:  # noqa: BLE001
         print(f"jev: replicated prefix cache failed ({type(error).__name__}: {error}), replaying one suffix at a time")
-    del cache  # the failed attempt may hold most of the gpu, e.g. after an oom on a small card
-    cache = model(input_ids=torch.tensor([prefix], dtype=torch.long, device=device), attention_mask=torch.ones((1, offset), dtype=torch.long, device=device), use_cache=True, logits_to_keep=1).past_key_values  # path (b): refill, path (a) may have left the cache half replicated
+    del cache
+    cache = model(input_ids=torch.tensor([prefix], dtype=torch.long, device=device), attention_mask=torch.ones((1, offset), dtype=torch.long, device=device), use_cache=True, logits_to_keep=1).past_key_values
     return [model(input_ids=torch.tensor([s], dtype=torch.long, device=device), attention_mask=torch.ones((1, offset + len(s)), dtype=torch.long, device=device), position_ids=torch.tensor([p[: len(s)]], dtype=torch.long, device=device), past_key_values=copy.deepcopy(cache), use_cache=True, logits_to_keep=1).logits[0, -1] for s, p in zip(suffixes, positions)]
 
 
@@ -125,7 +118,9 @@ class Decision:
 
     @staticmethod
     def read(pairs: list[tuple[str, str]], vocabulary: torch.Tensor, slots: list[int], input_tokens: int, seconds: float) -> "Decision":
-        probabilities = softmax(logits := vocabulary.float()[slots[: len(pairs)]].cpu().tolist())
+        logits = vocabulary.float()[slots[: len(pairs)]]
+        assert torch.isfinite(logits).all(), "non-finite option logits"
+        probabilities, logits = torch.softmax(logits, dim=0).tolist(), logits.tolist()
         return Decision({i: p for (i, _), p in zip(pairs, probabilities)}, {i: l for (i, _), l in zip(pairs, logits)}, pairs[max(range(len(pairs)), key=probabilities.__getitem__)][0], input_tokens, seconds)
 
 
@@ -151,12 +146,12 @@ class Jev:
         try:
             with torch.inference_mode():
                 logits = shared_logits(self.model, prefix, [ids[len(prefix) :] for _, _, ids in decisions], self.pad)
-        except Exception as error:  # path (c) of PLAN.md: no cache path survived, so pay for the state once per question  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001
             print(f"jev: shared prefix cache unusable ({type(error).__name__}: {error}), one full forward per question")
             logits = None
-        if logits is None:  # outside the except block, whose traceback pins the failed attempt's tensors
+        if logits is None:
             return [self.decide(state, question, options) for question, options in questions]
-        return [Decision.read(pairs, row, self.slots, len(ids), time.perf_counter() - started) for (pairs, _, ids), row in zip(decisions, logits)]  # every Decision reports the wall time of the whole shared call
+        return [Decision.read(pairs, row, self.slots, len(ids), time.perf_counter() - started) for (pairs, _, ids), row in zip(decisions, logits)]
 
     def close(self) -> None:
         del self.model
