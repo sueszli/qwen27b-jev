@@ -1,19 +1,16 @@
-qwen27b-jev
+       _
+      (_)__ _   __
+     / / _ \ | / /
+    / /  __/ |/ /
+ __/ /\___/|___/
+/___/
 
+decision readout for https://huggingface.co/Qwen/Qwen3.8-27B
 
-Jev-style decisions on Qwen3.8-27B: one forward pass, softmax
-over the answer-letter logits, a probability per option. No
-token sampled, no JSON parsed. Prefill a state once, ask many
-questions.
+one forward pass, softmax over the answer-letter logits, a
+probability per option. no token sampled, no json parsed.
+port of https://github.com/TheoLeeCJ/openjev from 4B to 27B.
 
-
-    from jev import Jev
-
-    llm = Jev()
-    llm.decide(state, question, {"yes": "It did.", "no": "It did not."})
-    llm.decide_many(state, [(question, options), ...])
+quick demo:
 
     $ ./run.sh uv run example.py
-
-
-Port of https://github.com/TheoLeeCJ/openjev from 4B to 27B.
