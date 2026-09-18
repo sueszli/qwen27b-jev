@@ -1,36 +1,19 @@
 qwen27b-jev
 
 
-Jev-style semantic decisions on Qwen3.8-27B.
-
-
-Most agent decisions are small: route this, retry that, does the
-evidence support X. A chat model can answer them, but it spends
-time generating text that software immediately parses back into
-an if statement.
-
-This reads typed option probabilities directly from the model.
-One forward pass, softmax over the logits of the answer letters
-A..P at the first generation position. No token is sampled, no
-JSON is parsed, no grammar is enforced. A long state can be
-prefilled once and branched across many questions.
+Jev-style decisions on Qwen3.8-27B: one forward pass, softmax
+over the answer-letter logits, a probability per option. No
+token sampled, no JSON parsed. Prefill a state once, ask many
+questions.
 
 
     from jev import Jev
 
     llm = Jev()
-    llm.decide(state, question, {"yes": "It succeeded.", "no": "It did not."})
+    llm.decide(state, question, {"yes": "It did.", "no": "It did not."})
     llm.decide_many(state, [(question, options), ...])
 
     $ ./run.sh uv run example.py
 
 
-Interface and prompt follow OpenJev, which did this with a 4B
-model. This swaps in the 27B. See PLAN.md.
-
-
-References:
-
-- OpenJev: https://github.com/TheoLeeCJ/openjev
-- Jev: https://typesafe.ai
-- Qwen3.8-27B: https://huggingface.co/Qwen/Qwen3.8-27B
+Port of https://github.com/TheoLeeCJ/openjev from 4B to 27B.
