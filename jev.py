@@ -11,6 +11,7 @@ import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 import torch
 import transformers
@@ -18,9 +19,12 @@ import transformers
 LETTERS = "ABCDEFGHIJKLMNOP"
 SYSTEM = "Apply the supplied criterion to the supplied evidence. Choose exactly one listed option. Respond with only its uppercase letter, with no explanation or reasoning."
 
+
 #
 # utils
 #
+
+
 def set_storage(weights_dir: Path) -> Path:
     (weights_dir / "tmp").mkdir(parents=True, exist_ok=True)  # also creates weights_dir
     hf, pt, xdg = weights_dir / "hf", weights_dir / "torch", weights_dir / "cache"
@@ -45,11 +49,14 @@ def softmax(logits: list[float]) -> list[float]:
     weights = [math.exp(l - max(logits)) for l in logits]
     return [w / sum(weights) for w in weights]  # sums to 1 within float error
 
+
 #
 # setup
 #
+
+
 def load_text_model(model: str, revision: str) -> tuple:
-    assert torch.cuda.is_available(), "no cuda device, use ./run.sh"
+    assert torch.cuda.is_available(), "no cuda device"
     common = {"revision": revision, "trust_remote_code": False, "cache_dir": os.environ["HF_HUB_CACHE"]}  # huggingface_hub read HF_HOME at import, before set_storage
     config = transformers.AutoConfig.from_pretrained(model, **common)
     assert config.model_type in ("qwen3_5", "qwen3_5_text"), f"unexpected model_type {config.model_type}"
@@ -65,9 +72,12 @@ def slot_ids(tokenizer) -> tuple[list[int], int]:
     assert pad is not None, "tokenizer has neither a pad nor an eos token to pad suffixes with"
     return [ids[0] for ids in encoded], pad
 
+
 #
 # inference
 #
+
+
 def encode_decision(tokenizer, slots: list[int], state: str | dict | list, question: str, options: list[str] | dict[str, str]) -> tuple[list[tuple[str, str]], str, list[int]]:
     assert isinstance(state, (str, dict, list)) and state and isinstance(question, str) and question and isinstance(options, (list, dict)), "need a nonempty state, a nonempty question and list or dict options"
     json.dumps([state, options], ensure_ascii=False, allow_nan=False)  # rejects nan, inf and unserializable data
@@ -147,3 +157,13 @@ class Jev:
         if logits is None:  # outside the except block, whose traceback pins the failed attempt's tensors
             return [self.decide(state, question, options) for question, options in questions]
         return [Decision.read(pairs, row, self.slots, len(ids), time.perf_counter() - started) for (pairs, _, ids), row in zip(decisions, logits)]  # every Decision reports the wall time of the whole shared call
+
+    def close(self) -> None:
+        del self.model
+        torch.cuda.empty_cache()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_) -> None:
+        self.close()
