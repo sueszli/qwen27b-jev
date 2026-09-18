@@ -7,62 +7,18 @@ multiple-choice questions for https://huggingface.co/Qwen/Qwen3.8-27B
     llm.decide(state, "did the deployment succeed?", ["yes", "no", "unclear"])
     -> {"yes": 0.91, "no": 0.03, "unclear": 0.06}
 
+a language model writes one token per forward pass. but after the
+first pass it already holds a score for every possible next token,
+including A, B and C. those scores are the answer. this reads them
+and stops.
 
-how a language model answers
+    chat       generate "yes" token by token, parse it.  one sample.
+    readout    one pass, softmax over A B C.             the whole distribution.
 
-    a forward pass takes text in and puts out a score for every
-    token in the vocabulary: how likely is each one to come next.
-    to write an answer the model picks one token from those
-    scores, appends it, and runs another forward pass. one pass
-    per token, until it stops. then you read the text.
+a grammar only filters what chat may generate. it is still chat.
 
-
-the trick
-
-    ask "did the deployment succeed? A yes, B no, C unclear" and
-    run one forward pass. the scores for A, B and C are already
-    in the output. that is the decision. everything the model
-    would write after this point is just spelling it out.
-
-    so read the three scores, turn them into percentages, stop.
-
-
-versus chat with a json grammar
-
-    a grammar constrains generation: at every step, illegal
-    tokens are masked, then one token is sampled from the rest.
-    the text always parses. but it is still generation.
-
-                       grammar                   readout
-                       -------                   -------
-    forward passes     one per token, ~4         one
-    picks a token      yes, sampled               no
-    returns            "yes"                      {yes .91, no .03, unclear .06}
-    same prompt twice  can differ                 identical
-
-    the argmax of readout is what a temperature-0 grammar would
-    return. readout also gives you the other options' odds, and a
-    51/49 coin flip looks like a coin flip instead of a confident
-    "yes".
-
-
-many questions, one document
-
-    the document is prefilled once. each question is a few dozen
-    tokens on top of it, and all of them run as one batch. 21
-    questions cost about as much as one.
-
-
-when not to use it
-
-    anything longer than one token: sentences, numbers, lists,
-    objects. those need generation, use chat.
-
-    anything that needs thinking. readout reads the answer at the
-    first position, before the model can reason. it is the gut
-    reaction. a 27B gut reaction is decent, but for hard calls
-    let it think and then use a grammar.
-
+the model cannot think before a one-token answer. for anything
+that needs reasoning, or output longer than a choice, use chat.
 
 https://github.com/TheoLeeCJ/openjev did this with a 4B model.
 
