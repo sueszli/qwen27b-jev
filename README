@@ -2,11 +2,41 @@
 ┃┓┃┃╻┃┣╸ ┃┗┫┏━┛  ┃┣┻┓╺━╸  ┃┣╸ ┃┏┛
 ┗┻┛┗┻┛┗━╸╹ ╹┗━╸  ╹┗━┛   ┗━┛┗━╸┗┛
 
-decision readout for https://huggingface.co/Qwen/Qwen3.8-27B
+yes/no and multiple-choice questions for https://huggingface.co/Qwen/Qwen3.8-27B
 
-give it a state, a question and a few options. it runs one
-forward pass and returns a probability for each option, read
-straight from the logits. nothing is generated or parsed.
+    llm.decide(state, "did the deployment succeed?", ["yes", "no", "unclear"])
+    -> {"yes": 0.91, "no": 0.03, "unclear": 0.06}
+
+the usual way to get a typed answer out of a chat model is a json
+grammar. ask for {"enum": ["yes", "no", "unclear"]} and watch what
+the model actually does to say yes:
+
+    forward pass 1: prompt          -> grammar allows only "   -> sample "
+    forward pass 2: prompt "        -> grammar allows y n u   -> sample yes
+    forward pass 3: prompt "yes     -> grammar allows only "  -> sample "
+    forward pass 4: prompt "yes"    -> grammar allows only eos
+    json.loads('"yes"')             -> "yes"
+
+four passes through 27B parameters. three of them produce tokens
+the grammar had already decided. at the end you hold one sampled
+string and no idea whether the model was 91% sure or 51% sure.
+
+now look at pass 1 again. the model already knew the answer there.
+its logits for y, n and u were sitting in that output. this repo
+just reads them:
+
+    forward pass 1: prompt ending in "answer with the letter:"
+    logits[A], logits[B], logits[C]  ->  softmax  ->  done
+
+one pass, no sampling, no grammar, no parsing, and you get the
+whole distribution instead of one draw from it. ask 21 questions
+about the same document and the document is prefilled once, the
+21 short suffixes run as one batch.
+
+what it costs: the answer is read at the first token, so the model
+cannot think first. this is qwen's gut reaction. for a decision
+that needs reasoning or an output that is not a small fixed set
+of options, use chat with a grammar.
 
 https://github.com/TheoLeeCJ/openjev did this with a 4B model.
 
