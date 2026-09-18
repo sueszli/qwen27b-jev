@@ -10,8 +10,13 @@ multiple-choice questions for https://huggingface.co/Qwen/Qwen3.8-27B
 a json grammar makes the model write a valid answer.
 this skips the writing and reads the odds of each answer instead.
 
-https://github.com/TheoLeeCJ/openjev did this with a 4B model.
-
 quick demo:
 
     $ ./run.sh uv run example.py
+
+
+References:
+
+- OpenJev, the same idea on a 4B model: https://github.com/TheoLeeCJ/openjev
+- Jev, the closed service it reproduces: https://typesafe.ai
+- Qwen3.8-27B: https://huggingface.co/Qwen/Qwen3.8-27B
