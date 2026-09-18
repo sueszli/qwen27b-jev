@@ -1,98 +1,78 @@
 # Plan
 
-Reproduce the OpenJev interface (https://github.com/TheoLeeCJ/openjev) on
-Qwen3.8-27B with as little code as possible: one flat module, one test file,
-one launcher, plain-text README, same layout as sueszli/exojit.
+OpenJev (https://github.com/TheoLeeCJ/openjev) on Qwen3.8-27B. Three files:
 
-## What we build
+    jev.py       the library, a uv script with inline deps, ~120 loc
+    example.py   a demo, like quick-qwen27b/example.py
+    run.sh       local gpu or slurm, copied from robot-disco/run-qwen27b.sh minus the server
 
-A semantic decision operator. Input is a row
+No package, no tests dir, no Makefile. Nothing runs on the login node.
 
-    {"id": ..., "state": <str|json>, "question": <str>,
-     "options": [{"id": ..., "description": ...}, ...]}   # 2..16 options
+## What jev does
 
-Output is a probability per option, read from the model's next-token logits
-over the answer letters A..P at the first generation position. No token is
-ever sampled, no JSON is parsed. Extra: a state can be prefilled once and
-branched across many questions.
+One forward pass, read the logits of the answer letters A..P at the first
+generation position, softmax. No token sampled, no JSON parsed, no grammar.
+A long state can be prefilled once and branched across many questions.
 
-## Layout
+## jev.py
 
-    qwen27b_jev.py      the whole library and the cli          (~150 loc)
-    tests/test_jev.py   prompt/softmax/validation tests, no gpu (~40 loc)
-    run.sh              sbatch wrapper for one h200, like robot-disco run-qwen27b.sh
-    examples.jsonl      the openjev example rows, verbatim
-    README, PLAN.md, LICENSE, Makefile, pyproject.toml, .gitignore
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = ["torch", "transformers", "accelerate"]
+    # ///
 
-OpenJev's `reranker.py` and `serial.py` are dropped: the reranker lost to
-direct logits on every general-decision workload, and serial is dominated by
-shared. `benchmarks/` is out of scope for now.
+    class Jev:
+        def __init__(self, model="Qwen/Qwen3.8-27B", revision=None, weights_dir=None, seed=41): ...
+        def decide(self, state, question, options) -> dict: ...
+        def decide_many(self, state, questions) -> list[dict]: ...
 
-## qwen27b_jev.py
+- `__init__`: `set_storage` and `set_seed` lifted from quick-qwen27b; load
+  `AutoModelForCausalLM` bf16 on `cuda:0`, `trust_remote_code=False`.
+  Check whether Qwen3.8-27B is a multimodal config needing
+  `get_text_config()` the way openjev handles qwen3_5.
+- `decide(state, question, options)`: options is `list[str]` (descriptions)
+  or `dict[id, description]`. Builds the frozen openjev prompt
+  `{"evidence", "criterion", "options":[{"letter","description"}]}` with the
+  openjev system prompt, chat template with `enable_thinking=False`, asserts
+  each letter is a single round-trip token at the boundary, one forward with
+  `logits_to_keep=1`, returns `{"probabilities": {id: p}, "logits": {id: l},
+  "argmax": id, "input_tokens": n, "seconds": s}`.
+- `decide_many(state, questions)`: `questions` is a list of
+  `(question, options)` over one exact state. Prefill the state prefix with
+  `use_cache=True`, `cache.reorder_cache` to replicate across the batch, one
+  padded suffix forward with continued `position_ids` and
+  `logits_to_keep=<end positions>`. Returns one `decide` dict per question.
+  This is openjev `shared.py`; `serial.py` and `reranker.py` are dropped.
 
-Collapse openjev `core.py` + `direct.py` + `shared.py` + `cli.py` into one file.
+Deferred: `decide(..., think=True)` that generates the `<think>` trace first
+and reads the letter logits after it. Same reasoning as chat, a distribution
+comes out instead of a string.
 
-1. `validate(row)`: same rules as openjev (2..16 options, unique ids,
-   nonempty finite-json state). Asserts, not exceptions.
-2. `messages(row)`: frozen system prompt + user payload
-   `{"evidence", "criterion", "options":[{"letter","description"}]}`.
-   Keep the exact openjev wording so results stay comparable.
-3. `load(model, revision)`: `AutoModelForCausalLM` in bf16 on `cuda:0`,
-   pinned hf revision, `trust_remote_code=False`. Check whether Qwen3.8-27B
-   is `qwen3_5`-style multimodal needing `get_text_config()`; branch as
-   openjev does if so.
-4. `encode(tok, row)`: chat template, `add_generation_prompt=True`,
-   `enable_thinking=False`; assert each letter is one round-trip token and
-   appending it does not change the prompt's tokenization.
-5. `score(model, tok, row)`: one forward with `logits_to_keep=1`, index the
-   letter slots, softmax. Return `{id, option_ids, probabilities,
-   option_logits, input_tokens, seconds}`.
-6. `score_shared(model, tok, rows)`: rows share one exact state. Prefill the
-   state prefix with `use_cache=True`, `cache.reorder_cache` to replicate the
-   kv across the batch, then one padded suffix forward with continued
-   `position_ids` and `logits_to_keep=<end positions>`. Same return shape
-   plus prefill/suffix timings.
-7. `cli`: click. `qwen27b-jev --mode direct|shared --input rows.jsonl
-   --output out.jsonl [--model Qwen/Qwen3.8-27B --revision <sha>]`.
-   Output must not exist yet.
+## example.py
 
-Deferred, only if step 5 shows the no-thinking 27B readout is good enough:
+    from jev import Jev
+    llm = Jev()
+    print(llm.decide("The deployment completed at 14:02 UTC. Health checks passed.",
+                     "Is there evidence that the deployment succeeded?",
+                     {"yes": "It succeeded.", "no": "It did not.", "insufficient": "Cannot tell."}))
+    print(llm.decide_many(long_state, [(q, {"yes": "Yes", "no": "No"}) for q in criteria]))
 
-8. `score_thinking`: generate the `<think>...</think>` trace normally, then
-   read the letter logits at the position after it instead of sampling.
-   Same reasoning as chat, but a distribution over options comes out.
+Prints probabilities and seconds, then the same 21 questions through
+`decide` one by one for the timing comparison.
 
 ## run.sh
 
-Copy the `slurm_gpu`/`local_gpu` shape from robot-disco `run-qwen27b.sh`,
-but no server: `sbatch --gres=gpu:nvidia_h200:1 --mem=128G` running
-`uv run qwen27b-jev ...` directly, `HF_HOME` on netscratch as in `env.sh`.
-Never run the model on the login node.
+robot-disco `run-qwen27b.sh` with the llama-server / vllm serve parts removed:
+`nvidia-smi` present -> run the command here, else `sbatch` one h200 with
+`--mem=128G`, `HF_HOME` on netscratch as in `env.sh`, tail the log.
 
-## Tests
-
-CPU only, run in `make precommit`:
-
-- prompt excludes fields outside `state/question/options`
-- softmax finite and normalized on extreme logits
-- duplicate option ids rejected, >16 options rejected
-- structured json state serialized into the prompt
-- `encode` letter-slot assertions, using a small tokenizer if one is cached,
-  else skipped
-
-GPU checks go through `run.sh` and are not part of precommit.
+    $ ./run.sh uv run example.py
 
 ## Steps
 
-1. scaffold: pyproject, Makefile, README, LICENSE, .gitignore, examples.jsonl
-2. `qwen27b_jev.py` steps 1-5 and 7, `tests/test_jev.py`, `make precommit`
-3. `run.sh`; smoke on one h200 with `examples.jsonl` in direct mode
-4. step 6 shared mode; smoke with 21 questions over one 8k-char state,
-   compare against direct on the same rows (openjev saw 5-6/777 argmax flips)
-5. write timings and agreement into README
-6. decide on step 8
-
-## Non-goals
-
-Reranker mode, browser/webgpu demo, the 706-row frozen evaluation matrix,
-calibration claims. Probabilities are conditional on the supplied options.
+1. this plan, README, LICENSE                                   (done)
+2. `jev.py` with `decide`, `example.py`, `run.sh`; smoke on one h200
+3. `decide_many`; check argmax agreement with `decide` on the same rows
+   (openjev saw 5-6 flips in 777)
+4. timings and agreement into README
+5. decide on `think=True`

@@ -16,9 +16,13 @@ JSON is parsed, no grammar is enforced. A long state can be
 prefilled once and branched across many questions.
 
 
-    $ ./run.sh uv run qwen27b-jev --mode direct --input examples.jsonl --output out.jsonl
-    $ ./run.sh uv run qwen27b-jev --mode shared --input rows.jsonl --output out.jsonl
-    $ make precommit
+    from jev import Jev
+
+    llm = Jev()
+    llm.decide(state, question, {"yes": "It succeeded.", "no": "It did not."})
+    llm.decide_many(state, [(question, options), ...])
+
+    $ ./run.sh uv run example.py
 
 
 Interface and prompt follow OpenJev, which did this with a 4B
