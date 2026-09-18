@@ -2,7 +2,7 @@
 ┃┓┃┃╻┃┣╸ ┃┗┫┏━┛  ┃┣┻┓╺━╸  ┃┣╸ ┃┏┛
 ┗┻┛┗┻┛┗━╸╹ ╹┗━╸  ╹┗━┛   ┗━┛┗━╸┗┛
 
-multiple-choice questions for https://huggingface.co/Qwen/Qwen3.8-27B
+multiple-choice questions Qwen3.8-27B
 
     llm.decide(state, "did the deployment succeed?", ["yes", "no", "unclear"])
     -> {"yes": 0.91, "no": 0.03, "unclear": 0.06}
