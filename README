@@ -1,15 +1,14 @@
-       _
-      (_)__ _   __
-     / / _ \ | / /
-    / /  __/ |/ /
- __/ /\___/|___/
-/___/
+                      ___ ____ _        _
+ __ ___ __ _____ _ _ |_  )__  | |__ ___(_)_____ __
+/ _` \ V  V / -_) ' \ / /  / /| '_ \___| / -_) V /
+\__, |\_/\_/\___|_||_/___|/_/ |_.__/  _/ \___|\_/
+   |_|                               |__/
 
 decision readout for https://huggingface.co/Qwen/Qwen3.8-27B
 
 one forward pass, softmax over the answer-letter logits, a
 probability per option. no token sampled, no json parsed.
-port of https://github.com/TheoLeeCJ/openjev from 4B to 27B.
+same idea as https://github.com/TheoLeeCJ/openjev, on 27B.
 
 quick demo:
 
