@@ -4,9 +4,11 @@
 
 decision readout for https://huggingface.co/Qwen/Qwen3.8-27B
 
-one forward pass, softmax over the answer-letter logits, a
-probability per option. no token sampled, no json parsed.
-same idea as https://github.com/TheoLeeCJ/openjev, on 27B.
+give it a state, a question and a few options. it runs one
+forward pass and returns a probability for each option, read
+straight from the logits. nothing is generated or parsed.
+
+https://github.com/TheoLeeCJ/openjev did this with a 4B model.
 
 quick demo:
 
