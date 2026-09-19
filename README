@@ -13,12 +13,11 @@ the model scores every possible next token anyway. we just take the best of A, B
 
     method                                     accuracy   seconds
     --------------------------------------------------------------
-    read the probabilities (jev_v1)              94.8%    0.49
-    force one letter with a grammar (jev_v2)     94.8%    0.34
-    let the model write freely (plain)           89.7%    0.37
-    any of the above, thinking first            100.0%     3.5
+    read the probabilities (jev_v1)              94.8%    0.50
+    force one letter with a grammar (jev_v2)     94.8%    0.33
+    let the model write freely (plain)           89.7%    0.39
 
-reading the probabilities and forcing a letter always pick the same answer. letting the model think first fixes every mistake but is ten times slower.
+reading the probabilities and forcing a letter always pick the same answer.
 
 
 References:

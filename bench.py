@@ -17,11 +17,11 @@ QUESTIONS = FACTS + HARD + TRICKY
 SELECTS = [("Which of these are stated consequences of the incident?", {"timeouts": "Gateway timeouts in eu-central-1", "chargebacks": "Chargebacks were filed", "uncaptured": "Orders confirmed without a captured payment", "data_leak": "Customer payment data was exposed"}, {"timeouts", "uncaptured"}), ("Which of these are stated facts about the response?", {"reverted": "The feature flag was reverted", "migration": "A database migration was rolled back", "reauth": "Some affected orders were re-authorized", "refund": "Every affected customer was refunded"}, {"reverted", "reauth"})]
 
 
-def run(llm: JevV1, think: bool) -> tuple[list[tuple[str, bool, float]], float]:
+def run(llm: JevV1) -> tuple[list[tuple[str, bool, float]], float]:
     # one mode over every item. returns (pick, correct, p of expected) per item, plus wall time.
     started = time.perf_counter()
-    graded = list(zip(llm.decide_many(STATE, [(question, ["yes", "no"]) for question, _ in QUESTIONS], think=think), [expected for _, expected in QUESTIONS]))
-    graded += [(decision, "yes" if option in expected else "no") for question, options, expected in SELECTS for option, decision in llm.select(STATE, question, options, think=think).items()]
+    graded = list(zip(llm.decide_many(STATE, [(question, ["yes", "no"]) for question, _ in QUESTIONS]), [expected for _, expected in QUESTIONS]))
+    graded += [(decision, "yes" if option in expected else "no") for question, options, expected in SELECTS for option, decision in llm.select(STATE, question, options).items()]
     return [(d.argmax, d.argmax == e, d.probabilities[e]) for d, e in graded], time.perf_counter() - started
 
 
@@ -35,10 +35,10 @@ def share(cls: type, llm: JevV1) -> JevV1:
 with JevV1() as llm:
     models = (("jev-v1", llm), ("jev-v2", share(JevV2, llm)), ("plain", share(Plain, llm)))
     llm.decide(STATE, QUESTIONS[0][0], ["yes", "no"])  # warm up. the first request compiles graphs.
-    results = {(name, think): run(model, think) for name, model in models for think in (False, True)}
-    lines = [f"{'mode':<12}{'accuracy':>10}{'p(expected)':>13}{'s/item':>9}{'total s':>10}", "-" * 54]
-    for (name, think), (graded, seconds) in results.items():
+    results = {name: run(model) for name, model in models}
+    lines = [f"{'method':<8}{'accuracy':>10}{'p(expected)':>13}{'s/item':>9}{'total s':>10}", "-" * 50]
+    for name, (graded, seconds) in results.items():
         odds = f"{statistics.fmean(p for _, _, p in graded):.3f}" if name == "jev-v1" else "-"  # only v1 has odds.
-        lines.append(f"{name + (' think' if think else ''):<12}{sum(c for _, c, _ in graded) / len(graded):>9.1%}{odds:>13}{seconds / len(graded):>9.2f}{seconds:>10.1f}")
-    lines += ["-" * 54] + [f"{a} and {b} pick the same answer on {statistics.fmean(x[0] == y[0] for x, y in zip(results[(a, think)][0], results[(b, think)][0])):.1%} of items, think={think}" for a, b in (("jev-v1", "jev-v2"), ("jev-v1", "plain")) for think in (False, True)]
+        lines.append(f"{name:<8}{sum(c for _, c, _ in graded) / len(graded):>9.1%}{odds:>13}{seconds / len(graded):>9.2f}{seconds:>10.1f}")
+    lines += ["-" * 50] + [f"{a} and {b} pick the same answer on {statistics.fmean(x[0] == y[0] for x, y in zip(results[a][0], results[b][0])):.1%} of items" for a, b in (("jev-v1", "jev-v2"), ("jev-v1", "plain"))]
     print("\n".join(lines))
