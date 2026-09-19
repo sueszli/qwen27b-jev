@@ -5,7 +5,9 @@
 import atexit
 import importlib
 import json
+import math
 import os
+import socket
 import subprocess
 import tarfile
 import time
@@ -48,6 +50,8 @@ def download_gguf(weights_dir: Path, repo: str, filename: str) -> Path:
 def start_llama_server(weights_dir: Path, repo: str, model: str, ctx: int, seed: int, port: int) -> subprocess.Popen:
     # run the model on the gpu behind a local http server and wait until it answers
     cmd = [str(download_llama_server(weights_dir)), "-m", str(download_gguf(weights_dir, repo, model)), "-ngl", "99", "-c", str(ctx), "-fa", "on", "-ctk", "q8_0", "-ctv", "q8_0", "-np", "1", "--seed", str(seed), "--host", "127.0.0.1", "--port", str(port)]
+    with socket.socket() as probe:
+        assert probe.connect_ex(("127.0.0.1", port)) != 0, f"port {port} is already taken, a stale llama-server would answer instead of ours"
     proc = subprocess.Popen(cmd, stdout=(weights_dir / "llama-server.log").open("w"), stderr=subprocess.STDOUT)
     atexit.register(proc.terminate)
     for _ in range(600):
@@ -89,7 +93,7 @@ class Jev:
         # render one chat prompt whose next token is the answer letter, or the start of a thinking block
         pairs = [(o, o) for o in options] if isinstance(options, list) else list(options.items())
         assert state and question and 2 <= len(pairs) <= len(self.letters) and len({i for i, _ in pairs}) == len(pairs), f"need a nonempty state and question and 2..{len(self.letters)} unique options"
-        payload = {"evidence": state, "criterion": question, **({"candidate": candidate} if candidate else {}), "options": [{"letter": letter, "description": description} for letter, (_, description) in zip(self.letters, pairs)]}
+        payload = {"evidence": state, "criterion": question, **({"candidate": candidate} if candidate is not None else {}), "options": [{"letter": letter, "description": description} for letter, (_, description) in zip(self.letters, pairs)]}
         system = "Apply the supplied criterion to the supplied evidence. If a candidate is supplied, judge that candidate against the criterion. Choose exactly one listed option and answer with only its uppercase letter."
         messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False, allow_nan=False)}]
         return [i for i, _ in pairs], self.post("/apply-template", {"messages": messages, "chat_template_kwargs": {"enable_thinking": think}})["prompt"]
@@ -101,12 +105,15 @@ class Jev:
         reasoning, input_tokens, cached_tokens = "", 0, 0
         if think:
             thought = self.post("/completion", {"prompt": prompt, "n_predict": self.max_think_tokens, "stop": ["</think>"], "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5, "repeat_last_n": self.ctx, "repeat_penalty": 1.0, "samplers": ["penalties", "top_k", "temperature", "top_p", "min_p"], "cache_prompt": True})
+            assert thought.get("stopping_word") == "</think>", f"thinking did not finish inside {self.max_think_tokens} tokens"
             reasoning, input_tokens, cached_tokens = thought["content"].strip(), thought["timings"]["prompt_n"], thought["timings"]["cache_n"]
             prompt = f"{prompt}{reasoning}\n</think>\n\n"
         letters = self.letters[: len(ids)]
-        answer = self.post("/completion", {"prompt": prompt, "n_predict": 1, "grammar": "root ::= " + " | ".join(f'"{letter}"' for letter in letters), "n_probs": len(ids), "post_sampling_probs": True, "temperature": 1.0, "samplers": ["temperature"], "cache_prompt": True})  # the grammar leaves only the answer letters, so their post-sampling probabilities are the softmax over exactly those
-        probabilities = {letter: 0.0 for letter in letters} | {t["token"]: t["prob"] for t in answer["completion_probabilities"][0]["top_probs"]}
-        probabilities = dict(zip(ids, (probabilities[letter] for letter in letters)))
+        answer = self.post("/completion", {"prompt": prompt, "n_predict": 1, "n_probs": 64, "temperature": 0, "cache_prompt": True})
+        logprobs = {t["token"]: t["logprob"] for t in answer["completion_probabilities"][0]["top_logprobs"]}
+        assert all(letter in logprobs for letter in letters), f"answer letters {[l for l in letters if l not in logprobs]} fell out of the top 64 next tokens, the prompt is not being read as a multiple-choice question"
+        odds = [math.exp(logprobs[letter]) for letter in letters]
+        probabilities = dict(zip(ids, (o / sum(odds) for o in odds)))  # softmax over exactly the answer letters
         return Decision(probabilities, max(probabilities, key=probabilities.__getitem__), reasoning, input_tokens + answer["timings"]["prompt_n"], cached_tokens + answer["timings"]["cache_n"], time.perf_counter() - started)
 
     def decide(self, state: str | dict | list, question: str, options: list[str] | dict[str, str], think: bool = False) -> Decision:
