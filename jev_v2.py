@@ -9,7 +9,7 @@ from jev_v1 import Decision, JevV1
 
 class JevV2(JevV1):
     def read(self, state: str | dict | list, question: str, options: list[str] | dict[str, str], think: bool, candidate: str | None = None) -> Decision:
-        # same forward pass as jev, but a grammar allows only the answer letters and temperature 0 picks the likeliest, no odds
+        # same forward pass, grammar allows only the letters, greedy, no odds
         started = time.perf_counter()
         ids, prompt = self.prompt(state, question, options, think, candidate)
         reasoning, input_tokens, cached_tokens = "", 0, 0
