@@ -20,4 +20,15 @@ with Jev() as llm:
     many = llm.decide_many(STATE, [(q, ["yes", "no"]) for q in QUESTIONS])
     for question, d in zip(QUESTIONS, many):
         show(question, d)
-    print(f"\033[2m{len(QUESTIONS)} questions over one shared state, {many[0].seconds:.2f}s\033[0m")
+    print(f"\033[2m{len(QUESTIONS)} questions over one shared state, {many[0].seconds:.2f}s\033[0m\n")
+
+    question = "Which of these are stated consequences of the incident?"
+    for option, d in llm.select(STATE, question, {"timeouts": "Gateway timeouts in eu-central-1", "chargebacks": "Chargebacks were filed", "uncaptured": "Orders confirmed without a captured payment", "data_leak": "Customer payment data was exposed"}).items():
+        show(option, d)
+    print(f"\033[2mpick all that apply, one independent yes/no per option\033[0m\n")
+
+    question = "Was the incident mitigated within two hours of the flag rollout?"
+    thought = llm.decide(STATE, question, ["yes", "no"], think=True)
+    show(question, thought)
+    print(f"\033[2m{thought.reasoning}\033[0m")
+    print(f"\033[2mthought first, {thought.seconds:.1f}s\033[0m")
