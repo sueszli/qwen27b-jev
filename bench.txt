@@ -1,9 +1,9 @@
 mode          accuracy  p(expected)   s/item   total s
 ------------------------------------------------------
-jev             94.7%        0.932     0.59      22.3
-jev think      100.0%        1.000     2.77     105.1
-plain           97.4%            -     0.34      12.9
-plain think    100.0%            -     2.74     104.0
+jev             94.8%        0.896     0.49      28.1
+jev think      100.0%        1.000     3.48     201.6
+plain           89.7%            -     0.32      18.8
+plain think    100.0%            -     3.45     199.8
 ------------------------------------------------------
-jev and plain pick the same answer on 92.1% of items, think=False
+jev and plain pick the same answer on 84.5% of items, think=False
 jev and plain pick the same answer on 100.0% of items, think=True
