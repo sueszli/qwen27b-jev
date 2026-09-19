@@ -4,7 +4,6 @@
 # ///
 import statistics
 import time
-from pathlib import Path
 
 from jev_v1 import JevV1
 from jev_v2 import JevV2
@@ -42,6 +41,4 @@ with JevV1() as llm:
         odds = f"{statistics.fmean(p for _, _, p in graded):.3f}" if name == "jev-v1" else "-"  # only jev reads odds, the others write one answer
         lines.append(f"{name + (' think' if think else ''):<12}{sum(c for _, c, _ in graded) / len(graded):>9.1%}{odds:>13}{seconds / len(graded):>9.2f}{seconds:>10.1f}")
     lines += ["-" * 54] + [f"{a} and {b} pick the same answer on {statistics.fmean(x[0] == y[0] for x, y in zip(results[(a, think)][0], results[(b, think)][0])):.1%} of items, think={think}" for a, b in (("jev-v1", "jev-v2"), ("jev-v1", "plain")) for think in (False, True)]
-    table = "\n".join(lines)
-    print(table)
-    Path(__file__).resolve().parent.joinpath("bench.txt").write_text(f"{table}\n")
+    print("\n".join(lines))
