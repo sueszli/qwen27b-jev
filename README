@@ -2,25 +2,23 @@
 ┃┓┃┃╻┃┣╸ ┃┗┫┏━┛  ┃┣┻┓╺━╸  ┃┣╸ ┃┏┛
 ┗┻┛┗┻┛┗━╸╹ ╹┗━╸  ╹┗━┛   ┗━┛┗━╸┗┛
 
-multiple-choice inference for https://huggingface.co/unsloth/Qwen3.8-27B-GGUF
+ask Qwen3.8-27B a multiple-choice question and get the probability of each answer, without generating any text.
 
     llm.decide(state, "did the deployment succeed?", ["yes", "no", "unclear"])
     -> {"yes": 0.91, "no": 0.03, "unclear": 0.06}
 
-    jev_v1   read the odds off the next token
-    jev_v2   grammar, greedy, no odds
-    plain    unconstrained
+the model computes a probability for every next token anyway. we just read the ones for A, B, C instead of sampling one and writing it out.
 
     $ make bench
 
-    mode          accuracy   s/item
-    -------------------------------
-    jev-v1          94.8%     0.49
-    jev-v2          94.8%     0.34
-    plain           89.7%     0.37
-    any + think    100.0%     3.5
+    method                                     accuracy   seconds
+    --------------------------------------------------------------
+    read the probabilities (jev_v1)              94.8%    0.49
+    force one letter with a grammar (jev_v2)     94.8%    0.34
+    let the model write freely (plain)           89.7%    0.37
+    any of the above, thinking first            100.0%     3.5
 
-v1 and v2 agree on every item. thinking is 10x slower.
+reading the probabilities and forcing a letter always pick the same answer. letting the model think first fixes every mistake but is ten times slower.
 
 
 References:
