@@ -4,9 +4,6 @@
 # ///
 from jev import Decision, Jev
 
-DIM, RESET = "\033[2m", "\033[0m"
-
-
 def show(question: str, d: Decision) -> None:
     print(f"{d.argmax:>7}  " + "  ".join(f"{k} {p:.2f}" for k, p in d.probabilities.items()) + f"  {question}")
 
@@ -18,9 +15,9 @@ with Jev() as llm:
     question = "Is there evidence that the deployment succeeded?"
     first = llm.decide("The deployment completed at 14:02 UTC. Health checks passed in all three zones.", question, {"yes": "It succeeded.", "no": "It did not.", "unclear": "Cannot tell."})
     show(question, first)
-    print(f"{DIM}{first.input_tokens} tokens, {first.seconds:.2f}s{RESET}\n")
+    print(f"\033[2m{first.input_tokens} tokens, {first.seconds:.2f}s\033[0m\n")
 
     many = llm.decide_many(STATE, [(q, ["yes", "no"]) for q in QUESTIONS])
     for question, d in zip(QUESTIONS, many):
         show(question, d)
-    print(f"{DIM}{len(QUESTIONS)} questions over one shared state, {many[0].seconds:.2f}s{RESET}")
+    print(f"\033[2m{len(QUESTIONS)} questions over one shared state, {many[0].seconds:.2f}s\033[0m")

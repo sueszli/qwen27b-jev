@@ -14,8 +14,11 @@ from typing import Self
 import torch
 import transformers
 
+WEIGHTS_DIR = Path(__file__).resolve().parent / "weights"
+
 
 def set_storage(weights_dir: Path) -> Path:
+    # keep every download and cache under one directory
     (weights_dir / "tmp").mkdir(parents=True, exist_ok=True)
     hf, pt, xdg = weights_dir / "hf", weights_dir / "torch", weights_dir / "cache"
     os.environ.update({"HF_HOME": str(hf), "HF_HUB_CACHE": str(hf), "TRANSFORMERS_CACHE": str(hf), "HF_XET_CACHE": str(hf / "xet"), "HF_HUB_DISABLE_TELEMETRY": "1", "TORCH_HOME": str(pt), "TORCHINDUCTOR_CACHE_DIR": str(pt / "inductor"), "TRITON_CACHE_DIR": str(pt / "triton"), "CUDA_CACHE_PATH": str(weights_dir / "cuda"), "XDG_CACHE_HOME": str(xdg), "XDG_DATA_HOME": str(xdg), "XDG_CONFIG_HOME": str(xdg), "TMPDIR": str(weights_dir / "tmp")})
@@ -23,6 +26,7 @@ def set_storage(weights_dir: Path) -> Path:
 
 
 def set_seed(seed: int = 41) -> int:
+    # make runs reproducible
     os.environ.update({"PYTHONHASHSEED": str(seed), "CUBLAS_WORKSPACE_CONFIG": ":4096:8"})
     random.seed(seed)
     if importlib.util.find_spec("numpy"):
@@ -44,14 +48,15 @@ class Decision:
 
 
 class Jev:
-    def __init__(self, weights_dir: str | Path | None = None, model: str = "Qwen/Qwen3.8-27B", revision: str = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0", seed: int = 41, batch_size: int = 8):
-        set_storage(Path(weights_dir or Path(__file__).resolve().parent / "weights"))
+    def __init__(self, weights_dir: str | Path = WEIGHTS_DIR, model: str = "Qwen/Qwen3.8-27B", revision: str = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0", seed: int = 41, batch_size: int = 8):
+        # load the text half of the model and find the token id of each answer letter
+        set_storage(Path(weights_dir))
         self.seed = set_seed(seed)
         self.batch_size = batch_size
         assert torch.cuda.is_available(), "no cuda device"
         common = {"revision": revision, "trust_remote_code": False, "cache_dir": os.environ["HF_HUB_CACHE"]}  # huggingface_hub read HF_HOME at import, before set_storage
         config = transformers.AutoConfig.from_pretrained(model, **common)
-        self.model = transformers.Qwen3_5ForCausalLM.from_pretrained(model, config=config.get_text_config(), dtype=torch.bfloat16, device_map={"": "cuda:0"}, **common).eval()  # the repo is a vision-language model, get_text_config() drops the vision tower
+        self.model = transformers.Qwen3_5ForCausalLM.from_pretrained(model, config=config.get_text_config(), dtype=torch.bfloat16, device_map={"": "cuda:0"}, **common).eval()
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(model, padding_side="right", **common)
         self.letters = "ABCDEFGHIJKLMNOP"
         encoded = [self.tokenizer.encode(letter, add_special_tokens=False) for letter in self.letters]
@@ -59,6 +64,7 @@ class Jev:
         self.slots = torch.tensor([e[0] for e in encoded], device=self.model.device)
 
     def prompt(self, state: str | dict | list, question: str, options: list[str] | dict[str, str]) -> tuple[list[str], str]:
+        # render one chat prompt that asks for a single answer letter
         pairs = [(o, o) for o in options] if isinstance(options, list) else list(options.items())
         assert state and question and 2 <= len(pairs) <= len(self.letters) and len({i for i, _ in pairs}) == len(pairs), f"need a nonempty state and question and 2..{len(self.letters)} unique options"
         payload = {"evidence": state, "criterion": question, "options": [{"letter": letter, "description": description} for letter, (_, description) in zip(self.letters, pairs)]}
@@ -67,6 +73,7 @@ class Jev:
 
     @torch.inference_mode()
     def decide_many(self, state: str | dict | list, questions: list[tuple[str, list[str] | dict[str, str]]]) -> list[Decision]:
+        # one forward per batch, read the letter logits at the last token, softmax them
         started = time.perf_counter()
         ids, prompts = zip(*(self.prompt(state, question, options) for question, options in questions))
         decisions = []
@@ -81,9 +88,11 @@ class Jev:
         return decisions
 
     def decide(self, state: str | dict | list, question: str, options: list[str] | dict[str, str]) -> Decision:
+        # decide_many with one question
         return self.decide_many(state, [(question, options)])[0]
 
     def close(self) -> None:
+        # free the gpu
         del self.model
         torch.cuda.empty_cache()
 
