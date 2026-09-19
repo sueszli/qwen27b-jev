@@ -65,19 +65,35 @@ def slot_ids(tokenizer) -> tuple[list[int], int]:
     assert pad is not None, "tokenizer has neither a pad nor an eos token to pad suffixes with"
     return [ids[0] for ids in encoded], pad
 
+
+def think_tokens(tokenizer) -> tuple[int, list[int]]:
+    close = tokenizer.encode("</think>", add_special_tokens=False)  # a generated trace is closed exactly the way the no-think template closes its empty one
+    ids = tokenizer.encode(tokenizer.apply_chat_template([{"role": "user", "content": "x"}], tokenize=False, add_generation_prompt=True, enable_thinking=False), add_special_tokens=False)
+    assert len(close) == 1 and ids.count(close[0]) == 1, "the no-think template does not close its empty think block with exactly one </think> token"
+    tail = ids[ids.index(close[0]) + 1 :]
+    assert tokenizer.decode(tail) == "\n\n", f"the no-think template writes {tokenizer.decode(tail)!r} after </think>, expected two newlines"
+    return close[0], tail
+
 #
 # inference
 #
-def encode_decision(tokenizer, slots: list[int], state: str | dict | list, question: str, options: list[str] | dict[str, str]) -> tuple[list[tuple[str, str]], str, list[int]]:
+def assert_boundary(tokenizer, slots: list[int], text: str, count: int) -> list[int]:
+    ids = tokenizer.encode(text, add_special_tokens=False)
+    assert all(tokenizer.encode(text + letter, add_special_tokens=False) == ids + [slot] for letter, slot in zip(LETTERS[:count], slots[:count])), "an answer boundary changes tokenization"  # a merge with the preceding newline would move the answer off its slot
+    return ids
+
+
+def encode_decision(tokenizer, slots: list[int], state: str | dict | list, question: str, options: list[str] | dict[str, str], think: bool = False, system: str = SYSTEM) -> tuple[list[tuple[str, str]], str, list[int]]:
     assert isinstance(state, (str, dict, list)) and state and isinstance(question, str) and question and isinstance(options, (list, dict)), "need a nonempty state, a nonempty question and list or dict options"
     json.dumps([state, options], ensure_ascii=False, allow_nan=False)  # rejects nan, inf and unserializable data
     pairs = [(o, o) for o in options] if isinstance(options, list) else list(options.items())
     assert 2 <= len(pairs) <= len(LETTERS) and all(isinstance(i, str) and i and isinstance(d, str) and d for i, d in pairs) and len({i for i, _ in pairs}) == len(pairs), f"need 2..{len(LETTERS)} options with unique nonempty string ids and nonempty descriptions, got {len(pairs)}"
     payload = {"evidence": state, "criterion": question, "options": [{"letter": letter, "description": description} for letter, (_, description) in zip(LETTERS, pairs)]}
-    prompt = tokenizer.apply_chat_template([{"role": "system", "content": SYSTEM}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}], tokenize=False, add_generation_prompt=True, enable_thinking=False)
-    ids = tokenizer.encode(prompt, add_special_tokens=False)
-    assert all(tokenizer.encode(prompt + letter, add_special_tokens=False) == ids + [slot] for letter, slot in zip(LETTERS[: len(pairs)], slots[: len(pairs)])), "an answer boundary changes tokenization"  # a merge with the preceding newline would move the answer off its slot
-    return pairs, prompt, ids
+    prompt = tokenizer.apply_chat_template([{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}], tokenize=False, add_generation_prompt=True, enable_thinking=think)
+    if think:  # the template opens the block itself, and prepends its own reasoning-effort line to the system prompt
+        assert prompt.endswith("<think>\n"), f"the thinking template no longer opens the think block: {prompt[-40:]!r}"
+        return pairs, prompt, tokenizer.encode(prompt, add_special_tokens=False)  # the letters land after the trace, so the boundary is asserted there instead
+    return pairs, prompt, assert_boundary(tokenizer, slots, prompt, len(pairs))
 
 
 def state_prefix(tokenizer, slots: list[int], state: str | dict | list, encoded: list[list[int]]) -> list[int]:
@@ -110,32 +126,49 @@ class Decision:
     probabilities: dict[str, float]  # option id -> p, sums to 1
     logits: dict[str, float]  # option id -> raw logit
     argmax: str  # option id with max p
-    input_tokens: int
+    input_tokens: int  # the prompt, never the think trace
     seconds: float  # wall time of the whole call
+    reasoning: str = ""  # think trace without its tags, empty unless think=True
+    output_tokens: int = 0  # generated trace tokens, 0 unless think=True
 
     @staticmethod
-    def read(pairs: list[tuple[str, str]], vocabulary: torch.Tensor, slots: list[int], input_tokens: int, seconds: float) -> "Decision":
+    def read(pairs: list[tuple[str, str]], vocabulary: torch.Tensor, slots: list[int], input_tokens: int, seconds: float, reasoning: str = "", output_tokens: int = 0) -> "Decision":
         probabilities = softmax(logits := vocabulary.float()[slots[: len(pairs)]].cpu().tolist())
-        return Decision({i: p for (i, _), p in zip(pairs, probabilities)}, {i: l for (i, _), l in zip(pairs, logits)}, pairs[max(range(len(pairs)), key=probabilities.__getitem__)][0], input_tokens, seconds)
+        return Decision({i: p for (i, _), p in zip(pairs, probabilities)}, {i: l for (i, _), l in zip(pairs, logits)}, pairs[max(range(len(pairs)), key=probabilities.__getitem__)][0], input_tokens, seconds, reasoning, output_tokens)
 
 
 class Jev:
-    def __init__(self, weights_dir: str | Path | None = None, model: str = "Qwen/Qwen3.8-27B", revision: str = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0", seed: int = 41):
+    def __init__(self, weights_dir: str | Path | None = None, model: str = "Qwen/Qwen3.8-27B", revision: str = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0", seed: int = 41, max_think_tokens: int = 4096):
         set_storage(Path(weights_dir or Path(__file__).resolve().parent / "weights"))
-        self.seed = set_seed(seed)
+        self.seed, self.max_think_tokens = set_seed(seed), max_think_tokens
         self.model, self.tokenizer = load_text_model(model, revision)
         self.slots, self.pad = slot_ids(self.tokenizer)
+        self.close, self.tail = think_tokens(self.tokenizer)
 
-    def decide(self, state: str | dict | list, question: str, options: list[str] | dict[str, str]) -> Decision:
+    def trace(self, ids: list[int]) -> list[int]:
+        input_ids = torch.tensor([ids], dtype=torch.long, device=next(self.model.parameters()).device)
+        generated = self.model.generate(input_ids=input_ids, attention_mask=torch.ones_like(input_ids), do_sample=False, max_new_tokens=self.max_think_tokens, eos_token_id=self.close, pad_token_id=self.pad)[0, len(ids) :].tolist()
+        assert generated and generated[-1] == self.close, f"the think trace did not reach </think> within max_think_tokens={self.max_think_tokens}, got {len(generated)} tokens"
+        return generated
+
+    def decide(self, state: str | dict | list, question: str, options: list[str] | dict[str, str], think: bool = False) -> Decision:
         started = time.perf_counter()
-        pairs, _, ids = encode_decision(self.tokenizer, self.slots, state, question, options)
+        pairs, prompt, ids = encode_decision(self.tokenizer, self.slots, state, question, options, think)
+        prompt_tokens, reasoning, generated = len(ids), "", []
         with torch.inference_mode():
+            if think:
+                generated = self.trace(ids)
+                reasoning = self.tokenizer.decode(generated[:-1]).strip()
+                ids, closed = ids + generated + self.tail, prompt + self.tokenizer.decode(generated + self.tail)
+                assert assert_boundary(self.tokenizer, self.slots, closed, len(pairs)) == ids, "the closed think trace does not re-encode to the tokens it was generated as"
             vocabulary = self.model(input_ids=(input_ids := torch.tensor([ids], dtype=torch.long, device=next(self.model.parameters()).device)), attention_mask=torch.ones_like(input_ids), use_cache=False, logits_to_keep=1).logits[0, -1]
-        return Decision.read(pairs, vocabulary, self.slots, len(ids), time.perf_counter() - started)
+        return Decision.read(pairs, vocabulary, self.slots, prompt_tokens, time.perf_counter() - started, reasoning, len(generated))
 
-    def decide_many(self, state: str | dict | list, questions: list[tuple[str, list[str] | dict[str, str]]]) -> list[Decision]:
+    def decide_many(self, state: str | dict | list, questions: list[tuple[str, list[str] | dict[str, str]]], think: bool = False) -> list[Decision]:
         started = time.perf_counter()
         assert isinstance(questions, list) and questions, "questions must be a nonempty list of (question, options)"
+        if think:  # the shared prefix buys nothing once every question generates its own trace, which dwarfs the prefill
+            return [self.decide(state, question, options, think=True) for question, options in questions]
         decisions = [encode_decision(self.tokenizer, self.slots, state, question, options) for question, options in questions]
         prefix = state_prefix(self.tokenizer, self.slots, state, [ids for _, _, ids in decisions])
         try:

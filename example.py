@@ -17,18 +17,19 @@ PARAGRAPHS = [
 STATE = "\n\n".join(PARAGRAPHS)
 QUESTIONS = ["Was the incident declared at severity SEV-2?", "Did the outage affect customers outside eu-central-1?", "Was the root cause a Postgres connection leak in the shadow router?", "Were any duplicate charges issued to customers?", "Was any customer payment data exposed?", "Was the feature flag rolled back before the hotfix was deployed?", "Did automated alerting detect the problem before the first customer report?", "Were all 212 affected orders re-authorized successfully?", "Did the first hypothesis of the team correctly identify the cause?", "Was the fail-open override introduced during this incident?", "Did the fulfilment hold window prevent double shipments?", "Was the connection-count alert routed to the checkout on-call?", "Did database CPU saturation cause the gateway timeouts?", "Was the staging environment able to reproduce the connection leak?", "Did support meet its 15 minute first-response target?", "Were SLA credits approved for the affected enterprise customers?", "Is there an accepted action item requiring a second reviewer for payment-path flag rollouts?", "Did the replica failover fully resolve the 502 responses?", "Was the incident mitigated within two hours of being declared?", "Did the incident result in any chargebacks?", "Did the checkout runbook cover connection saturation before the incident?"]
 
-llm = Jev()
-first = llm.decide("The deployment completed at 14:02 UTC. Health checks passed in all three zones.", "Is there evidence that the deployment succeeded?", {"yes": "It succeeded.", "no": "It did not.", "unclear": "Cannot tell."})
-print(f"probabilities: {first.probabilities}")
-print(f"logits: {first.logits}")
-print(f"argmax: {first.argmax}")
-print(f"{DIM}{first.input_tokens} input tokens, {first.seconds:.2f}s, p sums to {sum(first.probabilities.values()):.6f}{RESET}")
+if __name__ == "__main__":  # bench.py imports STATE and QUESTIONS
+    llm = Jev()
+    first = llm.decide("The deployment completed at 14:02 UTC. Health checks passed in all three zones.", "Is there evidence that the deployment succeeded?", {"yes": "It succeeded.", "no": "It did not.", "unclear": "Cannot tell."})
+    print(f"probabilities: {first.probabilities}")
+    print(f"logits: {first.logits}")
+    print(f"argmax: {first.argmax}")
+    print(f"{DIM}{first.input_tokens} input tokens, {first.seconds:.2f}s, p sums to {sum(first.probabilities.values()):.6f}{RESET}")
 
-shared = llm.decide_many(STATE, [(question, ["yes", "no"]) for question in QUESTIONS])
-loop = [llm.decide(STATE, question, ["yes", "no"]) for question in QUESTIONS]
-flips = sum(a.argmax != b.argmax for a, b in zip(shared, loop))
-gap = max(abs(a.probabilities["yes"] - b.probabilities["yes"]) for a, b in zip(shared, loop))
-for question, a, b in zip(QUESTIONS, shared, loop):
-    print(f"{a.argmax:>3} p(yes)={a.probabilities['yes']:.3f} | {b.argmax:>3} p(yes)={b.probabilities['yes']:.3f} {'disagree' if a.argmax != b.argmax else '        '} {question}")
-print(f"{DIM}{len(QUESTIONS)} questions, {len(STATE)} chars of state, {shared[0].input_tokens} input tokens{RESET}")
-print(f"{DIM}decide_many {shared[0].seconds:.2f}s, decide loop {sum(d.seconds for d in loop):.2f}s, {flips} argmax disagreements, max |dp| {gap:.4f}{RESET}")
+    shared = llm.decide_many(STATE, [(question, ["yes", "no"]) for question in QUESTIONS])
+    loop = [llm.decide(STATE, question, ["yes", "no"]) for question in QUESTIONS]
+    flips = sum(a.argmax != b.argmax for a, b in zip(shared, loop))
+    gap = max(abs(a.probabilities["yes"] - b.probabilities["yes"]) for a, b in zip(shared, loop))
+    for question, a, b in zip(QUESTIONS, shared, loop):
+        print(f"{a.argmax:>3} p(yes)={a.probabilities['yes']:.3f} | {b.argmax:>3} p(yes)={b.probabilities['yes']:.3f} {'disagree' if a.argmax != b.argmax else '        '} {question}")
+    print(f"{DIM}{len(QUESTIONS)} questions, {len(STATE)} chars of state, {shared[0].input_tokens} input tokens{RESET}")
+    print(f"{DIM}decide_many {shared[0].seconds:.2f}s, decide loop {sum(d.seconds for d in loop):.2f}s, {flips} argmax disagreements, max |dp| {gap:.4f}{RESET}")

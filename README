@@ -28,6 +28,20 @@ with the weights loaded 4-bit (bf16 needs 52 GB, TODO redo on one h200):
     disagreements   0 of 21 argmax, max |dp| 0.0005
 
 
+four ways to answer the same 21 questions, same 4-bit weights on the 3090 Ti.
+jev reads the letter logits, json writes {"answer": "A"} under a schema grammar;
+think means the model generates a reasoning trace first and the answer is read
+after it. all four agreed with the hand written key and with each other:
+
+    condition    correct   sec/q    out tok/q    p(key)
+    jev          21/21       1.65         0.0       0.998
+    jev+think    21/21      13.50       106.3       1.000
+    json         21/21       2.49         7.0           -
+    json+think   21/21      16.53       136.1           -
+
+    $ ./run.sh uv run bench.py
+
+
 References:
 
 - OpenJev, the same idea on a 4B model: https://github.com/TheoLeeCJ/openjev
