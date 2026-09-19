@@ -14,7 +14,7 @@ this skips the writing and reads the odds of each answer instead.
 
 quick demo:
 
-    $ ./run.sh uv run example.py
+    $ uv run example.py
 
 
 References:
