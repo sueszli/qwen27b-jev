@@ -15,11 +15,6 @@ three readouts of the same forward pass, one model, one server:
     -> {"yes": 0.91, "no": 0.03, "unclear": 0.06}
 
 
-quick demo:
-
-    $ uv run example.py
-
-
 benchmark, 58 graded items over one incident report, with and without
 thinking first, on a 3090 Ti:
 
