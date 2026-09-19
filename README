@@ -16,7 +16,7 @@ three readouts of one forward pass. same model, same server, same prompt.
 
 benchmark. 58 graded questions over one incident report, 3090 Ti:
 
-    $ uv run bench.py
+    $ make bench
 
     mode          accuracy  p(expected)   s/item   total s
     ------------------------------------------------------
