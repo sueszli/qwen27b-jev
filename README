@@ -17,8 +17,6 @@ the model scores every possible next token anyway. we just take the best of A, B
     force one letter with a grammar (jev_v2)     94.8%    0.33
     let the model write freely (plain)           89.7%    0.39
 
-reading the probabilities and forcing a letter always pick the same answer.
-
 
 References:
 
