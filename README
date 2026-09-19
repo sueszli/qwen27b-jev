@@ -17,17 +17,6 @@ quick demo:
     $ ./run.sh uv run example.py
 
 
-the demo then asks 21 yes/no questions about one 8k-char incident report.
-decide_many pays for that state once and reads all 21 answers off the shared
-prefix cache, the decide loop pays for it 21 times. measured on a 24 GB 3090 Ti
-with the weights loaded 4-bit (bf16 needs 52 GB, TODO redo on one h200):
-
-    cache path      b, per-suffix replay of the prefilled hybrid cache (a ran out of memory)
-    decide_many     6.8 s
-    decide loop     33.4 s
-    disagreements   0 of 21 argmax, max |dp| 0.0005
-
-
 References:
 
 - OpenJev, the same idea on a 4B model: https://github.com/TheoLeeCJ/openjev
