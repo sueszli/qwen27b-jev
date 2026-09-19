@@ -71,10 +71,10 @@ class Decision:
 
 
 class Jev:
-    def __init__(self, weights_dir: str | Path = WEIGHTS_DIR, repo: str = "unsloth/Qwen3.8-27B-GGUF", model: str = "Qwen3.8-27B-UD-Q5_K_XL.gguf", ctx: int = 32768, seed: int = 41, port: int = 8080, max_think_tokens: int = 4096):
+    def __init__(self, weights_dir: str | Path = WEIGHTS_DIR, repo: str = "unsloth/Qwen3.8-27B-GGUF", model: str = "Qwen3.8-27B-UD-Q5_K_XL.gguf", ctx: int = 131072, seed: int = 41, port: int = 8080, max_think_tokens: int = 81920):
         # start the server and check that every answer letter is one token
         weights_dir = set_storage(Path(weights_dir))
-        self.port, self.max_think_tokens = port, max_think_tokens
+        self.port, self.ctx, self.max_think_tokens = port, ctx, max_think_tokens
         self.proc = start_llama_server(weights_dir, repo, model, ctx, seed, port)
         self.letters = "ABCDEFGHIJKLMNOP"
         assert all(len(self.post("/tokenize", {"content": letter, "add_special": False})["tokens"]) == 1 for letter in self.letters), "an answer letter is not one token"
@@ -100,7 +100,7 @@ class Jev:
         ids, prompt = self.prompt(state, question, options, think, candidate)
         reasoning, input_tokens, cached_tokens = "", 0, 0
         if think:
-            thought = self.post("/completion", {"prompt": prompt, "n_predict": self.max_think_tokens, "stop": ["</think>"], "temperature": 1.0, "top_p": 0.95, "top_k": 20, "cache_prompt": True})
+            thought = self.post("/completion", {"prompt": prompt, "n_predict": self.max_think_tokens, "stop": ["</think>"], "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5, "repeat_last_n": self.ctx, "repeat_penalty": 1.0, "samplers": ["penalties", "top_k", "temperature", "top_p", "min_p"], "cache_prompt": True})
             reasoning, input_tokens, cached_tokens = thought["content"].strip(), thought["timings"]["prompt_n"], thought["timings"]["cache_n"]
             prompt = f"{prompt}{reasoning}\n</think>\n\n"
         letters = self.letters[: len(ids)]
