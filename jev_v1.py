@@ -20,7 +20,7 @@ WEIGHTS_DIR = Path(__file__).resolve().parent / "weights"
 
 
 def set_storage(weights_dir: Path) -> Path:
-    # everything downloads into weights_dir
+    # all downloads and caches live in weights_dir.
     (weights_dir / "tmp").mkdir(parents=True, exist_ok=True)
     hf, xdg = weights_dir / "hf", weights_dir / "cache"
     os.environ.update({"HF_HOME": str(hf), "HF_HUB_CACHE": str(hf), "HF_XET_CACHE": str(hf / "xet"), "HF_HUB_DISABLE_TELEMETRY": "1", "LLAMA_CACHE": str(weights_dir / "llama"), "XDG_CACHE_HOME": str(xdg), "XDG_DATA_HOME": str(xdg), "XDG_CONFIG_HOME": str(xdg), "TMPDIR": str(weights_dir / "tmp")})
@@ -28,7 +28,7 @@ def set_storage(weights_dir: Path) -> Path:
 
 
 def download_llama_server(weights_dir: Path, tag: str = "b10908") -> Path:
-    # prebuilt llama.cpp binary
+    # prebuilt llama.cpp release. downloaded once.
     root = weights_dir / f"llama.cpp-{tag}"
     if not (root / "llama-server").exists():
         root.mkdir(parents=True, exist_ok=True)
@@ -41,14 +41,14 @@ def download_llama_server(weights_dir: Path, tag: str = "b10908") -> Path:
 
 
 def download_gguf(weights_dir: Path, repo: str, filename: str) -> Path:
-    # quantized weights
+    # quantized weights. downloaded once.
     path = Path(importlib.import_module("huggingface_hub").hf_hub_download(repo, filename, local_dir=weights_dir / repo.split("/")[1], cache_dir=weights_dir / "hf"))
     assert path.is_relative_to(weights_dir), f"{path} escaped {weights_dir}"
     return path
 
 
 def start_llama_server(weights_dir: Path, repo: str, model: str, ctx: int, seed: int, port: int) -> subprocess.Popen:
-    # start the server, wait until it answers
+    # start llama-server on the gpu. block until /health answers.
     cmd = [str(download_llama_server(weights_dir)), "-m", str(download_gguf(weights_dir, repo, model)), "-ngl", "99", "-c", str(ctx), "-fa", "on", "-ctk", "q8_0", "-ctv", "q8_0", "-np", "1", "--seed", str(seed), "--host", "127.0.0.1", "--port", str(port)]
     with socket.socket() as probe:
         assert probe.connect_ex(("127.0.0.1", port)) != 0, f"port {port} is already taken, a stale llama-server would answer instead of ours"
@@ -76,7 +76,7 @@ class Decision:
 
 class JevV1:
     def __init__(self, weights_dir: str | Path = WEIGHTS_DIR, repo: str = "unsloth/Qwen3.8-27B-GGUF", model: str = "Qwen3.8-27B-UD-Q5_K_XL.gguf", ctx: int = 32768, seed: int = 41, port: int = 8080, max_think_tokens: int = 81920):
-        # start the server, check every answer letter is one token
+        # start the server. assert each answer letter is a single token.
         weights_dir = set_storage(Path(weights_dir))
         self.port, self.ctx, self.max_think_tokens = port, ctx, max_think_tokens
         self.proc = start_llama_server(weights_dir, repo, model, ctx, seed, port)
@@ -84,13 +84,13 @@ class JevV1:
         assert all(len(self.post("/tokenize", {"content": letter, "add_special": False})["tokens"]) == 1 for letter in self.letters), "an answer letter is not one token"
 
     def post(self, path: str, body: dict) -> dict:
-        # json in, json out
+        # json request, json response.
         request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", json.dumps(body).encode(), {"content-type": "application/json"})
         with urllib.request.urlopen(request, timeout=24 * 3600) as response:
             return json.load(response)
 
     def prompt(self, state: str | dict | list, question: str, options: list[str] | dict[str, str], think: bool, candidate: str | None = None) -> tuple[list[str], str]:
-        # chat prompt ending right before the answer letter, or the thinking block
+        # chat prompt. ends right before the answer letter, or before the thinking block.
         pairs = [(o, o) for o in options] if isinstance(options, list) else list(options.items())
         assert state and question and 2 <= len(pairs) <= len(self.letters) and len({i for i, _ in pairs}) == len(pairs), f"need a nonempty state and question and 2..{len(self.letters)} unique options"
         payload = {"evidence": state, "criterion": question, **({"candidate": candidate} if candidate is not None else {}), "options": [{"letter": letter, "description": description} for letter, (_, description) in zip(self.letters, pairs)]}
@@ -99,7 +99,7 @@ class JevV1:
         return [i for i, _ in pairs], self.post("/apply-template", {"messages": messages, "chat_template_kwargs": {"enable_thinking": think}})["prompt"]
 
     def read(self, state: str | dict | list, question: str, options: list[str] | dict[str, str], think: bool, candidate: str | None = None) -> Decision:
-        # think if asked, then read the odds of each letter off the next token
+        # think if asked. read the odds of each letter off the next token. softmax over the letters.
         started = time.perf_counter()
         ids, prompt = self.prompt(state, question, options, think, candidate)
         reasoning, input_tokens, cached_tokens = "", 0, 0
@@ -113,32 +113,32 @@ class JevV1:
         logprobs = {t["token"]: t["logprob"] for t in answer["completion_probabilities"][0]["top_logprobs"]}
         assert all(letter in logprobs for letter in letters), f"answer letters {[l for l in letters if l not in logprobs]} fell out of the top 16 next tokens, the prompt is not being read as a multiple-choice question"
         odds = [math.exp(logprobs[letter]) for letter in letters]
-        probabilities = dict(zip(ids, (o / sum(odds) for o in odds)))  # softmax over the letters only
+        probabilities = dict(zip(ids, (o / sum(odds) for o in odds)))
         return Decision(probabilities, max(probabilities, key=probabilities.__getitem__), reasoning, input_tokens + answer["timings"]["prompt_n"], cached_tokens + answer["timings"]["cache_n"], time.perf_counter() - started)
 
     def decide(self, state: str | dict | list, question: str, options: list[str] | dict[str, str], think: bool = False) -> Decision:
-        # pick one option
+        # one question, one option.
         return self.read(state, question, options, think)
 
     def warm(self, state: str | dict | list, think: bool) -> None:
-        # cache the state once, later requests resume from here
+        # prefill the state once. later requests resume from its end.
         prompt = self.prompt(state, "placeholder", ["yes", "no"], think)[1]
         self.post("/completion", {"prompt": prompt[: prompt.index(', "criterion"')], "n_predict": 1, "cache_prompt": True})
 
     def decide_many(self, state: str | dict | list, questions: list[tuple[str, list[str] | dict[str, str]]], think: bool = False) -> list[Decision]:
-        # pick one option per question, same state
+        # many questions, one option each. state is prefilled once.
         self.warm(state, think)
         return [self.read(state, question, options, think) for question, options in questions]
 
     def select(self, state: str | dict | list, question: str, options: list[str] | dict[str, str], think: bool = False) -> dict[str, Decision]:
-        # pick all that apply, one yes/no per option
+        # all options that apply. one yes/no per option.
         pairs = [(o, o) for o in options] if isinstance(options, list) else list(options.items())
         verdict = {"yes": "The candidate satisfies the criterion.", "no": "The candidate does not satisfy the criterion."}
         self.warm(state, think)
         return {i: self.read(state, question, verdict, think, candidate=description) for i, description in pairs}
 
     def close(self) -> None:
-        # stop the server
+        # stop the server.
         if self.proc.poll() is None:
             self.proc.terminate()
             self.proc.wait()
