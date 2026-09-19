@@ -15,9 +15,6 @@ from typing import Self
 import torch
 import transformers
 
-LETTERS = "ABCDEFGHIJKLMNOP"
-SYSTEM = "Apply the supplied criterion to the supplied evidence. Choose exactly one listed option. Respond with only its uppercase letter, with no explanation or reasoning."
-
 
 #
 # utils
@@ -58,9 +55,10 @@ def load_text_model(model: str, revision: str) -> tuple:
 
 
 def slot_ids(tokenizer) -> tuple[list[int], int]:
-    encoded = [tokenizer.encode(letter, add_special_tokens=False) for letter in LETTERS]
-    assert all(len(ids) == 1 and tokenizer.decode(ids) == letter for ids, letter in zip(encoded, LETTERS)), "an answer slot is not one exact round-trip token"
-    assert len({ids[0] for ids in encoded}) == len(LETTERS), "answer slot tokens collide"
+    letters = "ABCDEFGHIJKLMNOP"
+    encoded = [tokenizer.encode(letter, add_special_tokens=False) for letter in letters]
+    assert all(len(ids) == 1 and tokenizer.decode(ids) == letter for ids, letter in zip(encoded, letters)), "an answer slot is not one exact round-trip token"
+    assert len({ids[0] for ids in encoded}) == len(letters), "answer slot tokens collide"
     pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     assert pad is not None, "tokenizer has neither a pad nor an eos token to pad suffixes with"
     return [ids[0] for ids in encoded], pad
@@ -74,12 +72,13 @@ def slot_ids(tokenizer) -> tuple[list[int], int]:
 def encode_decision(tokenizer, slots: list[int], state: str | dict | list, question: str, options: list[str] | dict[str, str]) -> tuple[list[tuple[str, str]], str, list[int]]:
     assert isinstance(state, (str, dict, list)) and state and isinstance(question, str) and question and isinstance(options, (list, dict)), "need a nonempty state, a nonempty question and list or dict options"
     json.dumps([state, options], ensure_ascii=False, allow_nan=False)  # rejects nan, inf and unserializable data
+    letters, system = "ABCDEFGHIJKLMNOP", "Apply the supplied criterion to the supplied evidence. Choose exactly one listed option. Respond with only its uppercase letter, with no explanation or reasoning."
     pairs = [(o, o) for o in options] if isinstance(options, list) else list(options.items())
-    assert 2 <= len(pairs) <= len(LETTERS) and all(isinstance(i, str) and i and isinstance(d, str) and d for i, d in pairs) and len({i for i, _ in pairs}) == len(pairs), f"need 2..{len(LETTERS)} options with unique nonempty string ids and nonempty descriptions, got {len(pairs)}"
-    payload = {"evidence": state, "criterion": question, "options": [{"letter": letter, "description": description} for letter, (_, description) in zip(LETTERS, pairs)]}
-    prompt = tokenizer.apply_chat_template([{"role": "system", "content": SYSTEM}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}], tokenize=False, add_generation_prompt=True, enable_thinking=False)
+    assert 2 <= len(pairs) <= len(letters) and all(isinstance(i, str) and i and isinstance(d, str) and d for i, d in pairs) and len({i for i, _ in pairs}) == len(pairs), f"need 2..{len(letters)} options with unique nonempty string ids and nonempty descriptions, got {len(pairs)}"
+    payload = {"evidence": state, "criterion": question, "options": [{"letter": letter, "description": description} for letter, (_, description) in zip(letters, pairs)]}
+    prompt = tokenizer.apply_chat_template([{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}], tokenize=False, add_generation_prompt=True, enable_thinking=False)
     ids = tokenizer.encode(prompt, add_special_tokens=False)
-    assert all(tokenizer.encode(prompt + letter, add_special_tokens=False) == ids + [slot] for letter, slot in zip(LETTERS[: len(pairs)], slots[: len(pairs)])), "an answer boundary changes tokenization"  # a merge with the preceding newline would move the answer off its slot
+    assert all(tokenizer.encode(prompt + letter, add_special_tokens=False) == ids + [slot] for letter, slot in zip(letters[: len(pairs)], slots[: len(pairs)])), "an answer boundary changes tokenization"  # a merge with the preceding newline would move the answer off its slot
     return pairs, prompt, ids
 
 
@@ -101,7 +100,7 @@ def shared_logits(model, prefix: list[int], suffixes: list[list[int]], pad: int)
         cache.reorder_cache(torch.zeros(len(suffixes), dtype=torch.long, device=device))
         padded = model(input_ids=torch.tensor([s + [pad] * (width - len(s)) for s in suffixes], dtype=torch.long, device=device), attention_mask=torch.tensor([[1] * (offset + len(s)) + [0] * (width - len(s)) for s in suffixes], dtype=torch.long, device=device), position_ids=torch.tensor(positions, dtype=torch.long, device=device), past_key_values=cache, use_cache=True, logits_to_keep=torch.tensor(keep, dtype=torch.long, device=device))
         return [padded.logits[row, keep.index(end)] for row, end in enumerate(ends)]
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         print(f"jev: replicated prefix cache failed ({type(error).__name__}: {error}), replaying one suffix at a time")
     del cache
     cache = model(input_ids=torch.tensor([prefix], dtype=torch.long, device=device), attention_mask=torch.ones((1, offset), dtype=torch.long, device=device), use_cache=True, logits_to_keep=1).past_key_values
@@ -146,7 +145,7 @@ class Jev:
         try:
             with torch.inference_mode():
                 logits = shared_logits(self.model, prefix, [ids[len(prefix) :] for _, _, ids in decisions], self.pad)
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             print(f"jev: shared prefix cache unusable ({type(error).__name__}: {error}), one full forward per question")
             logits = None
         if logits is None:
