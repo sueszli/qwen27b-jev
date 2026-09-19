@@ -6,7 +6,8 @@ import statistics
 import time
 from pathlib import Path
 
-from jev import Jev
+from jev_v1 import JevV1
+from jev_v2 import JevV2
 from plain import Plain
 
 STATE = "INCIDENT REPORT INC-4471. A feature flag rollout at 13:31 UTC opened one Postgres connection per request, exhausting the pg-eu-3 limit of 2,000 and causing 30 second gateway timeouts in eu-central-1 only. The flag was reverted at 14:44 and the incident mitigated at 15:41. 212 orders were confirmed without a captured payment because the authorization circuit breaker was misconfigured to fail open; 173 were re-authorized and 39 cancelled. No duplicate charges, no chargebacks, no payment data exposed. Automated alerting fired at 13:44, three minutes after the first customer report."
@@ -17,7 +18,7 @@ QUESTIONS = FACTS + HARD + TRICKY
 SELECTS = [("Which of these are stated consequences of the incident?", {"timeouts": "Gateway timeouts in eu-central-1", "chargebacks": "Chargebacks were filed", "uncaptured": "Orders confirmed without a captured payment", "data_leak": "Customer payment data was exposed"}, {"timeouts", "uncaptured"}), ("Which of these are stated facts about the response?", {"reverted": "The feature flag was reverted", "migration": "A database migration was rolled back", "reauth": "Some affected orders were re-authorized", "refund": "Every affected customer was refunded"}, {"reverted", "reauth"})]
 
 
-def run(llm: Jev, think: bool) -> tuple[list[tuple[str, bool, float]], float]:
+def run(llm: JevV1, think: bool) -> tuple[list[tuple[str, bool, float]], float]:
     # answer every item in one mode, return one (pick, correct, probability of the expected answer) per item plus the wall time
     started = time.perf_counter()
     graded = list(zip(llm.decide_many(STATE, [(question, ["yes", "no"]) for question, _ in QUESTIONS], think=think), [expected for _, expected in QUESTIONS]))
@@ -25,16 +26,22 @@ def run(llm: Jev, think: bool) -> tuple[list[tuple[str, bool, float]], float]:
     return [(d.argmax, d.argmax == e, d.probabilities[e]) for d, e in graded], time.perf_counter() - started
 
 
-with Jev() as llm:
-    plain = Plain.__new__(Plain)
-    plain.__dict__ = llm.__dict__  # both read the one running server, a second one would not fit on the card
+def share(cls: type, llm: JevV1) -> JevV1:
+    # a second readout over the one running server, a second server would not fit on the card
+    other = cls.__new__(cls)
+    other.__dict__ = llm.__dict__
+    return other
+
+
+with JevV1() as llm:
+    models = (("jev-v1", llm), ("jev-v2", share(JevV2, llm)), ("plain", share(Plain, llm)))
     llm.decide(STATE, QUESTIONS[0][0], ["yes", "no"])  # the first request compiles llama.cpp's graphs, keep that out of the timings
-    results = {(name, think): run(model, think) for name, model in (("jev", llm), ("plain", plain)) for think in (False, True)}
+    results = {(name, think): run(model, think) for name, model in models for think in (False, True)}
     lines = [f"{'mode':<12}{'accuracy':>10}{'p(expected)':>13}{'s/item':>9}{'total s':>10}", "-" * 54]
     for (name, think), (graded, seconds) in results.items():
-        odds = f"{statistics.fmean(p for _, _, p in graded):.3f}" if name == "jev" else "-"  # plain only ever writes one letter, so its odds are its accuracy
+        odds = f"{statistics.fmean(p for _, _, p in graded):.3f}" if name == "jev-v1" else "-"  # only jev reads odds, the others write one answer
         lines.append(f"{name + (' think' if think else ''):<12}{sum(c for _, c, _ in graded) / len(graded):>9.1%}{odds:>13}{seconds / len(graded):>9.2f}{seconds:>10.1f}")
-    lines += ["-" * 54] + [f"jev and plain pick the same answer on {statistics.fmean(a[0] == b[0] for a, b in zip(results[('jev', think)][0], results[('plain', think)][0])):.1%} of items, think={think}" for think in (False, True)]
+    lines += ["-" * 54] + [f"{a} and {b} pick the same answer on {statistics.fmean(x[0] == y[0] for x, y in zip(results[(a, think)][0], results[(b, think)][0])):.1%} of items, think={think}" for a, b in (("jev-v1", "jev-v2"), ("jev-v1", "plain")) for think in (False, True)]
     table = "\n".join(lines)
     print(table)
     Path(__file__).resolve().parent.joinpath("bench.txt").write_text(f"{table}\n")

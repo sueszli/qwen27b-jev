@@ -74,8 +74,8 @@ class Decision:
     seconds: float
 
 
-class Jev:
-    def __init__(self, weights_dir: str | Path = WEIGHTS_DIR, repo: str = "unsloth/Qwen3.8-27B-GGUF", model: str = "Qwen3.8-27B-UD-Q5_K_XL.gguf", ctx: int = 131072, seed: int = 41, port: int = 8080, max_think_tokens: int = 81920):
+class JevV1:
+    def __init__(self, weights_dir: str | Path = WEIGHTS_DIR, repo: str = "unsloth/Qwen3.8-27B-GGUF", model: str = "Qwen3.8-27B-UD-Q5_K_XL.gguf", ctx: int = 32768, seed: int = 41, port: int = 8080, max_think_tokens: int = 81920):
         # start the server and check that every answer letter is one token
         weights_dir = set_storage(Path(weights_dir))
         self.port, self.ctx, self.max_think_tokens = port, ctx, max_think_tokens
@@ -109,9 +109,9 @@ class Jev:
             reasoning, input_tokens, cached_tokens = thought["content"].strip(), thought["timings"]["prompt_n"], thought["timings"]["cache_n"]
             prompt = f"{prompt}{reasoning}\n</think>\n\n"
         letters = self.letters[: len(ids)]
-        answer = self.post("/completion", {"prompt": prompt, "n_predict": 1, "n_probs": 64, "temperature": 0, "cache_prompt": True})
+        answer = self.post("/completion", {"prompt": prompt, "n_predict": 1, "n_probs": 16, "temperature": 0, "cache_prompt": True})
         logprobs = {t["token"]: t["logprob"] for t in answer["completion_probabilities"][0]["top_logprobs"]}
-        assert all(letter in logprobs for letter in letters), f"answer letters {[l for l in letters if l not in logprobs]} fell out of the top 64 next tokens, the prompt is not being read as a multiple-choice question"
+        assert all(letter in logprobs for letter in letters), f"answer letters {[l for l in letters if l not in logprobs]} fell out of the top 16 next tokens, the prompt is not being read as a multiple-choice question"
         odds = [math.exp(logprobs[letter]) for letter in letters]
         probabilities = dict(zip(ids, (o / sum(odds) for o in odds)))  # softmax over exactly the answer letters
         return Decision(probabilities, max(probabilities, key=probabilities.__getitem__), reasoning, input_tokens + answer["timings"]["prompt_n"], cached_tokens + answer["timings"]["cache_n"], time.perf_counter() - started)

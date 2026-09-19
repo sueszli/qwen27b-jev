@@ -2,15 +2,14 @@
 # requires-python = ">=3.12"
 # dependencies = ["huggingface_hub"]
 # ///
-import re
 import time
 
 from jev_v1 import Decision, JevV1
 
 
-class Plain(JevV1):
+class JevV2(JevV1):
     def read(self, state: str | dict | list, question: str, options: list[str] | dict[str, str], think: bool, candidate: str | None = None) -> Decision:
-        # the ordinary way: no constraint at all, the model writes whatever it wants and we fish the answer letter out of it
+        # same forward pass as jev, but a grammar allows only the answer letters and temperature 0 picks the likeliest, no odds
         started = time.perf_counter()
         ids, prompt = self.prompt(state, question, options, think, candidate)
         reasoning, input_tokens, cached_tokens = "", 0, 0
@@ -20,8 +19,7 @@ class Plain(JevV1):
             reasoning, input_tokens, cached_tokens = thought["content"].strip(), thought["timings"]["prompt_n"], thought["timings"]["cache_n"]
             prompt = f"{prompt}{reasoning}\n</think>\n\n"
         letters = self.letters[: len(ids)]
-        sampling = {"temperature": 1.0, "top_p": 0.95} if think else {"temperature": 0.7, "top_p": 0.8}  # qwen samples a thought-out answer hotter than a direct one
-        answer = self.post("/completion", {"prompt": prompt, "n_predict": 256, "top_k": 20, "min_p": 0.0, "cache_prompt": True, **sampling})
-        found = re.findall(rf"\b([{letters}])\b", answer["content"])
-        written = found[0] if found else None  # first standalone letter wins, none counts as wrong
-        return Decision({i: float(letter == written) for i, letter in zip(ids, letters)}, ids[letters.index(written)] if written else "", reasoning, input_tokens + answer["timings"]["prompt_n"], cached_tokens + answer["timings"]["cache_n"], time.perf_counter() - started)
+        answer = self.post("/completion", {"prompt": prompt, "n_predict": 1, "grammar": "root ::= " + " | ".join(f'"{letter}"' for letter in letters), "temperature": 0, "cache_prompt": True})
+        written = answer["content"].strip()
+        assert written in letters, f"the model wrote {written!r} instead of one of {letters}"
+        return Decision({i: float(letter == written) for i, letter in zip(ids, letters)}, ids[letters.index(written)], reasoning, input_tokens + answer["timings"]["prompt_n"], cached_tokens + answer["timings"]["cache_n"], time.perf_counter() - started)
