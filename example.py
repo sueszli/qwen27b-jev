@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["torch", "transformers>=5.8", "accelerate", "huggingface_hub"]
+# dependencies = ["huggingface_hub"]
 # ///
 from jev import Decision, Jev
 
@@ -20,7 +20,7 @@ with Jev() as llm:
     many = llm.decide_many(STATE, [(q, ["yes", "no"]) for q in QUESTIONS])
     for question, d in zip(QUESTIONS, many):
         show(question, d)
-    print(f"\033[2m{len(QUESTIONS)} questions over one shared state, {many[0].seconds:.2f}s\033[0m\n")
+    print(f"\033[2m{len(QUESTIONS)} questions over one shared state, {sum(d.seconds for d in many):.2f}s, {sum(d.cached_tokens for d in many)} of {sum(d.input_tokens + d.cached_tokens for d in many)} prompt tokens served from cache\033[0m\n")
 
     question = "Which of these are stated consequences of the incident?"
     for option, d in llm.select(STATE, question, {"timeouts": "Gateway timeouts in eu-central-1", "chargebacks": "Chargebacks were filed", "uncaptured": "Orders confirmed without a captured payment", "data_leak": "Customer payment data was exposed"}).items():

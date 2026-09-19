@@ -2,7 +2,7 @@
 ┃┓┃┃╻┃┣╸ ┃┗┫┏━┛  ┃┣┻┓╺━╸  ┃┣╸ ┃┏┛
 ┗┻┛┗┻┛┗━╸╹ ╹┗━╸  ╹┗━┛   ┗━┛┗━╸┗┛
 
-multiple-choice questions Qwen3.8-27B
+multiple-choice questions for https://huggingface.co/unsloth/Qwen3.8-27B-GGUF
 
 
 a json grammar makes the model write a valid answer.
