@@ -2,21 +2,19 @@
 ┃┓┃┃╻┃┣╸ ┃┗┫┏━┛  ┃┣┻┓╺━╸  ┃┣╸ ┃┏┛
 ┗┻┛┗┻┛┗━╸╹ ╹┗━╸  ╹┗━┛   ┗━┛┗━╸┗┛
 
-multiple-choice questions for https://huggingface.co/unsloth/Qwen3.8-27B-GGUF
+multiple-choice inference for https://huggingface.co/unsloth/Qwen3.8-27B-GGUF
 
+three readouts of one forward pass. same model, same server, same prompt.
 
-three readouts of the same forward pass, one model, one server:
-
-    jev_v1   read the odds of every answer letter off the next token, no generation
-    jev_v2   a grammar allows only the answer letters, greedy, no odds
-    plain    unconstrained, the model writes what it wants, we fish the letter out
+    jev_v1   reads the odds of each answer letter off the next token. no generation.
+    jev_v2   grammar restricts the next token to the answer letters. greedy. no odds.
+    plain    unconstrained. the model writes, we regex the letter out.
 
     llm.decide(state, "did the deployment succeed?", ["yes", "no", "unclear"])
     -> {"yes": 0.91, "no": 0.03, "unclear": 0.06}
 
 
-benchmark, 58 graded items over one incident report, with and without
-thinking first, on a 3090 Ti:
+benchmark. 58 graded questions over one incident report, 3090 Ti:
 
     $ uv run bench.py
 
@@ -34,11 +32,10 @@ thinking first, on a 3090 Ti:
     jev-v1 and plain pick the same answer on 84.5% of items, think=False
     jev-v1 and plain pick the same answer on 100.0% of items, think=True
 
-jev-v1 and jev-v2 are the same decision: argmax of the next token. v2 is
-faster because it skips the top-k dump that v1 needs to read the odds. v1
-earns that only if you use the odds, e.g. to think just on the uncertain
-ones. both beat sampling an unconstrained answer by five points, and
-thinking gets everything to 100% at ten times the cost.
+· v1 and v2 make the same decision: argmax of the next token. 100% agreement.
+· v2 is faster. v1 pays 150 ms for the top-k dump it needs to read the odds.
+· both beat unconstrained sampling by 5 points. sampling picks the 38% option 38% of the time.
+· thinking gets everything to 100% at 10x the cost. v1's odds tell you when to pay for it.
 
 
 References:
